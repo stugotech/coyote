@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/stugotech/coyote/acmelib"
+	"github.com/stugotech/coyote/cryptutil"
 	"github.com/stugotech/coyote/secret"
 	"github.com/stugotech/coyote/store"
 	"github.com/stugotech/golog"
@@ -104,7 +105,7 @@ func (c *coyote) getAccount(email string) (*acmelib.Account, error) {
 	if err != nil {
 		return nil, logger.Errore(err)
 	}
-	signer, err := parsePrivateKeyFromDER(key)
+	signer, err := cryptutil.ParsePrivateKeyFromDER(key)
 	if err != nil {
 		return nil, logger.Errore(err)
 	}
@@ -264,6 +265,7 @@ func (c *coyote) NewCertificate(domains []string) ([]*store.Certificate, error) 
 			CertificateChain: cert.CertificatesPEM(),
 			PrivateKey:       cert.PrivateKeyPEM(),
 			Expires:          cert.Certificates[0].NotAfter,
+			Thumbprint:       cryptutil.Thumbprint(cert.Certificates[0].Raw),
 		}
 
 		err = c.config.Store.PutCertificate(storeCert)

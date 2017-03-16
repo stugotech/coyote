@@ -5,6 +5,7 @@ import (
 	"encoding/pem"
 
 	"github.com/stugotech/coyote/coyote"
+	"github.com/stugotech/coyote/cryptutil"
 	"github.com/stugotech/coyote/store"
 	"github.com/stugotech/golog"
 )
@@ -54,26 +55,6 @@ func (h *Host) DecodeCertificates() ([]*x509.Certificate, error) {
 	return certs, nil
 }
 
-// CoyoteWithExternal creates certificates for all hosts defined in the external system
-func CoyoteWithExternal(coy coyote.Coyote, external Client) error {
-	hosts, err := external.GetHosts()
-	if err != nil {
-		return logger.Errore(err)
-	}
-
-	var domains []string
-	for _, host := range hosts {
-		domains = append(domains, host.Domain)
-	}
-
-	_, err = coy.NewCertificate(domains)
-	if err != nil {
-		return logger.Errore(err)
-	}
-
-	return nil
-}
-
 // ExternalWithCoyote copies all certificate keys to the external system
 func ExternalWithCoyote(coy coyote.Coyote, external Client) error {
 	certs, err := coy.GetCertificates()
@@ -83,20 +64,36 @@ func ExternalWithCoyote(coy coyote.Coyote, external Client) error {
 	return Certificates(certs, external)
 }
 
-// Full first makes sure that certificates exist for all external hosts, and then copies the
-// certificates to the external system.
-func Full(coy coyote.Coyote, external Client) error {
-	err := CoyoteWithExternal(coy, external)
-	if err == nil {
-		err = ExternalWithCoyote(coy, external)
-	}
-	return err
-}
-
 // Certificate pushes the keys for a single certificate to all relevant remote hosts.
 func Certificate(cert *store.Certificate, external Client) error {
 	for _, domain := range getAllNames(cert) {
-		host := &Host{
+		logger.Debug("syncing certificate with external system",
+			golog.String("domain", domain),
+			golog.String("thumbprint", cert.Thumbprint),
+		)
+
+		host, err := external.GetHost(domain)
+		if err != nil {
+			return logger.Errore(err)
+		}
+
+		if host != nil {
+			bundle, err := host.DecodeCertificates()
+			if err != nil {
+				return logger.Errore(err)
+			}
+
+			extThumbprint := cryptutil.Thumbprint(bundle[0].Raw)
+
+			logger.Debug("found certificate in external store",
+				golog.String("thumbprint", extThumbprint),
+			)
+
+			if extThumbprint == cert.Thumbprint {
+				return nil
+			}
+		}
+		host = &Host{
 			Domain:         domain,
 			CertificatePEM: string(cert.CertificateChain),
 			PrivateKeyPEM:  string(cert.PrivateKey),

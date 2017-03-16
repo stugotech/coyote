@@ -52,6 +52,7 @@ type Certificate struct {
 	Expires          time.Time
 	CertificateChain []byte
 	PrivateKey       []byte
+	Thumbprint       string
 }
 
 // Challenge represents an ACME challenge
@@ -207,6 +208,18 @@ func (s *libkvStore) PutAccount(account *Account) error {
 
 // PutCertificate saves a certificate in the store
 func (s *libkvStore) PutCertificate(cert *Certificate) error {
+	if cert.Domain == "" {
+		return logger.Error("must set certificate domain")
+	}
+	if cert.Thumbprint == "" {
+		return logger.Error("must set certificate thumbprint")
+	}
+	if len(cert.PrivateKey) == 0 {
+		return logger.Error("must set certificate private key")
+	}
+	if len(cert.CertificateChain) == 0 {
+		return logger.Error("must set certificate bundle")
+	}
 	bytes, err := json.Marshal(cert)
 	if err != nil {
 		return logger.Errore(err)
