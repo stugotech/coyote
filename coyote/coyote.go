@@ -35,7 +35,7 @@ type Coyote interface {
 	RenewExpiringCertificates(before time.Duration) error
 	// RenewLoop loops forever, checking expiry dates on certificates on the specified `period` and
 	// renewing certificates that will expire before `before` has elapsed.
-	RenewLoop(period time.Duration, before time.Duration) error
+	RenewLoop(period time.Duration, before time.Duration)
 }
 
 // Config describes the coyote configuration settings
@@ -298,10 +298,10 @@ func (c *coyote) RenewExpiringCertificates(before time.Duration) error {
 
 // RenewLoop loops forever, checking expiry dates on certificates on the specified `period` and
 // renewing certificates that will expire before `before` has elapsed.
-func (c *coyote) RenewLoop(period time.Duration, before time.Duration) error {
+func (c *coyote) RenewLoop(period time.Duration, before time.Duration) {
 	for {
 		if err := c.RenewExpiringCertificates(before); err != nil {
-			return logger.Errore(err)
+			logger.Errore(err)
 		}
 		time.Sleep(period)
 	}
