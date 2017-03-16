@@ -81,6 +81,7 @@ type Account struct {
 
 // NewClient creates a new client connection to the ACME directory
 func NewClient(directoryURL string) (Client, error) {
+	logger.Debug("creating new ACME client", golog.String("directory", directoryURL))
 	return &clientInfo{
 		client: &acme.Client{
 			DirectoryURL: directoryURL,
@@ -151,6 +152,8 @@ func (c *clientInfo) UseAccount(ctx context.Context, account *Account) (*Account
 	if err != nil {
 		return nil, logger.Errorex("error getting account details", err, golog.String("email", account.Email))
 	}
+
+	c.client = client
 
 	return &Account{
 		AgreedTerms:  acc.AgreedTerms,

@@ -10,9 +10,15 @@ import (
 	"github.com/stugotech/coyote/secret"
 	"github.com/stugotech/coyote/store"
 	"github.com/stugotech/golog"
+	"golang.org/x/net/publicsuffix"
 )
 
 var logger = golog.NewPackageLogger()
+
+const (
+	authRetries = 5
+	backoffMs   = 300
+)
 
 // Coyote describes the things that the coyote tool can do
 type Coyote interface {
@@ -22,8 +28,8 @@ type Coyote interface {
 	BeginAuthorize(domain string) (*acmelib.HTTPAuthChallenge, error)
 	// CompleteAuthorize tells the ACME server to complete the challenge.
 	CompleteAuthorize(challengeURI string) error
-	// NewCertificate creates a new certificate for the specified domain.
-	NewCertificate(domain string, sans []string) error
+	// NewCertificate creates one or more certificates for the specified domains, grouped by registered domain.
+	NewCertificate(domains []string) error
 	// RenewExpiringCertificates checks expiry dates on certificates and renews certificates that will
 	// expire before `before` has elapsed.
 	RenewExpiringCertificates(before time.Duration) error
@@ -123,7 +129,7 @@ func (c *coyote) createAccount(email string, acceptTOS bool) (*acmelib.Account, 
 		return nil, logger.Errore(err)
 	}
 	// save new account
-	storeAccount := &Account{
+	storeAccount := &store.Account{
 		URI:   account.URI,
 		Email: email,
 		Key:   keyBytes,
@@ -143,9 +149,17 @@ func (c *coyote) Authorize(domain string) error {
 	}
 
 	ctx := context.Background()
-	err = c.client.CompleteAuthorize(ctx, challenge.AuthChallenge)
-	if err != nil {
-		return logger.Errore(err)
+
+	for i := 1; ; i++ {
+		err = c.client.CompleteAuthorize(ctx, challenge.AuthChallenge)
+		if err == nil {
+			break
+		}
+		if i >= authRetries {
+			return err
+		}
+		// wait a bit before trying again
+		time.Sleep(time.Duration(i*backoffMs) * time.Millisecond)
 	}
 
 	logger.Info("authorization of domain successful", golog.String("domain", domain))
@@ -173,7 +187,7 @@ func (c *coyote) BeginAuthorize(domain string) (*acmelib.HTTPAuthChallenge, erro
 		golog.String("response", challenge.Response),
 	)
 
-	err = c.config.Store.PutChallenge(&Challenge{
+	err = c.config.Store.PutChallenge(&store.Challenge{
 		Key:   filepath.Base(challenge.Path),
 		Value: challenge.Response,
 	})
@@ -198,25 +212,63 @@ func (c *coyote) CompleteAuthorize(challengeURI string) error {
 	return nil
 }
 
-// NewCertificate creates a new certificate for the specified domain.
-func (c *coyote) NewCertificate(domain string, sans []string) error {
-	ctx := context.Background()
-	cert, err := c.client.CreateCertificate(ctx, domain, sans)
-	if err != nil {
-		return logger.Errore(err)
+// NewCertificate creates a new certificate for the specified domains.
+func (c *coyote) NewCertificate(domains []string) error {
+	logger.Info("create new certificate",
+		golog.Strings("domains", domains),
+	)
+
+	groupedDomains := make(map[string][]string)
+
+	// authorize domains first and group under registered domains
+	for _, d := range domains {
+		if err := c.Authorize(d); err != nil {
+			return logger.Errore(err)
+		}
+		reg, err := publicsuffix.EffectiveTLDPlusOne(d)
+		if err != nil {
+			return logger.Errorex("can't get public suffix for domain", err, golog.String("domain", d))
+		}
+		// don't add the domain itself to the child list
+		if reg == d {
+			_, ok := groupedDomains[reg]
+			if !ok {
+				groupedDomains[reg] = []string{}
+			}
+		} else {
+			groupedDomains[reg] = append(groupedDomains[reg], d)
+		}
 	}
 
-	storeCert := &Certificate{
-		Domain:           domain,
-		AlternativeNames: sans,
-		CertificateChain: cert.CertificatesPEM(),
-		PrivateKey:       cert.PrivateKeyPEM(),
-		Expires:          cert.Certificates[0].NotAfter,
-	}
+	// now create certificates
+	for domain, sans := range groupedDomains {
+		// see if the domain already has a certificate
+		storeCert, err := c.config.Store.GetCertificate(domain)
+		if err != nil {
+			return logger.Errore(err)
+		}
 
-	err = c.config.Store.PutCertificate(storeCert)
-	if err != nil {
-		return logger.Errore(err)
+		if storeCert != nil {
+			sans = uniqueStrings(sans, storeCert.AlternativeNames)
+		}
+
+		cert, err := c.client.CreateCertificate(context.Background(), domain, sans)
+		if err != nil {
+			return logger.Errore(err)
+		}
+
+		storeCert = &store.Certificate{
+			Domain:           domain,
+			AlternativeNames: sans,
+			CertificateChain: cert.CertificatesPEM(),
+			PrivateKey:       cert.PrivateKeyPEM(),
+			Expires:          cert.Certificates[0].NotAfter,
+		}
+
+		err = c.config.Store.PutCertificate(storeCert)
+		if err != nil {
+			return logger.Errore(err)
+		}
 	}
 
 	return nil
@@ -234,7 +286,8 @@ func (c *coyote) RenewExpiringCertificates(before time.Duration) error {
 
 	for _, cert := range certs {
 		if threshold.After(cert.Expires) {
-			if err = c.NewCertificate(cert.Domain, cert.AlternativeNames); err != nil {
+			domains := append(cert.AlternativeNames[:], cert.Domain)
+			if err = c.NewCertificate(domains); err != nil {
 				return logger.Errore(err)
 			}
 		}
@@ -252,4 +305,22 @@ func (c *coyote) RenewLoop(period time.Duration, before time.Duration) error {
 		}
 		time.Sleep(period)
 	}
+}
+
+// uniqueStrings returns the unique strings in all of the lists
+func uniqueStrings(src ...[]string) []string {
+	set := make(map[string]struct{})
+
+	for _, srci := range src {
+		for _, v := range srci {
+			set[v] = struct{}{}
+		}
+	}
+
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+
+	return keys
 }

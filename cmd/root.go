@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stugotech/coyote/coyote"
 	"github.com/stugotech/coyote/store"
+	"github.com/stugotech/goconfig"
 )
 
 // Flag names
@@ -15,22 +16,16 @@ const (
 	AcceptTOSFlag          = "accept-tos"
 	AcmeDirectoryFlag      = "acme-directory"
 	ConfigFlag             = "config"
-	DomainFlag             = "domain"
 	EmailFlag              = "email"
 	LetsEncryptStagingFlag = "le-staging"
 	LogFlag                = "log"
-	PathPrefixFlag         = "path-prefix"
-	SANFlag                = "san"
 	SealKeyFlag            = "seal-key"
-	StoreFlag              = "store"
-	StoreNodesFlag         = "store-nodes"
-	StorePrefixFlag        = "store-prefix"
 )
 
 // Default flag values
 var (
 	AcmeDirectoryProduction = "https://acme-v01.api.letsencrypt.org/directory"
-	AcmeDirectoryDefault    = "https://acme-staging.api.letsencrypt.org/directory"
+	AcmeDirectoryStaging    = "https://acme-staging.api.letsencrypt.org/directory"
 	LogDefault              = "info"
 	StoreDefault            = "etcd"
 	StoreNodesDefault       = []string{"127.0.0.1:2379"}
@@ -61,14 +56,14 @@ func init() {
 	pf.StringVar(&configFile, ConfigFlag, "", "config file")
 
 	// ACME settings
-	pf.String(AcmeDirectoryFlag, AcmeDirectoryDefault, "ACME directory")
+	pf.String(AcmeDirectoryFlag, AcmeDirectoryProduction, "ACME directory")
 	pf.Bool(AcceptTOSFlag, false, "accept the terms of the ACME service")
 	pf.String(EmailFlag, "", "the contact email address of the registrant")
 
 	// KV store settings
-	pf.String(StoreFlag, StoreDefault, "Name of the KV store to use [etcd|consul|boltdb|zookeeper]")
-	pf.StringSlice(StoreNodesFlag, StoreNodesDefault, "Comma-seperated list of KV store nodes")
-	pf.String(StorePrefixFlag, StorePrefixDefault, "Base path for values in KV store")
+	pf.String(store.StoreKey, StoreDefault, "Name of the KV store to use [etcd|consul|boltdb|zookeeper]")
+	pf.StringSlice(store.StoreNodesKey, StoreNodesDefault, "Comma-seperated list of KV store nodes")
+	pf.String(store.StorePrefixKey, StorePrefixDefault, "Base path for values in KV store")
 
 	// other settings
 	pf.String(SealKeyFlag, "", "Key used to encrypt secret values")
@@ -97,11 +92,7 @@ func initConfig() {
 }
 
 func createCoyoteFromConfig() (coyote.Coyote, error) {
-	store, err := store.NewStore(
-		viper.GetString(StoreFlag),
-		viper.GetStringSlice(StoreNodesFlag),
-		viper.GetString(StorePrefixFlag),
-	)
+	store, err := store.NewStoreFromConfig(goconfig.Viper())
 	if err != nil {
 		return nil, err
 	}

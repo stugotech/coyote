@@ -11,10 +11,18 @@ import (
 	"github.com/docker/libkv/store/consul"
 	"github.com/docker/libkv/store/etcd"
 	"github.com/docker/libkv/store/zookeeper"
+	"github.com/stugotech/goconfig"
 	"github.com/stugotech/golog"
 )
 
 var logger = golog.NewPackageLogger()
+
+// Configuration keys
+const (
+	StoreKey       = "store"
+	StoreNodesKey  = "store-nodes"
+	StorePrefixKey = "store-prefix"
+)
 
 // Store allows data to be retrieved from a data store
 type Store interface {
@@ -63,6 +71,15 @@ const (
 	certificatesPath = "certificates"
 	challengesPath   = "challenges"
 )
+
+// NewStoreFromConfig creates a new store based on the provided config
+func NewStoreFromConfig(conf goconfig.Config) (Store, error) {
+	return NewStore(
+		conf.GetString(StoreKey),
+		conf.GetStringSlice(StoreNodesKey),
+		conf.GetString(StorePrefixKey),
+	)
+}
 
 // NewStore creates a new store with the given parameters
 func NewStore(storeName string, nodes []string, prefix string) (Store, error) {
@@ -152,6 +169,9 @@ func (s *libkvStore) GetCertificates() ([]*Certificate, error) {
 // GetChallenge gets a challenge from the store
 func (s *libkvStore) GetChallenge(key string) (*Challenge, error) {
 	kv, err := s.store.Get(s.path(challengesPath, key))
+	if err == store.ErrKeyNotFound {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, logger.Errorex("error retrieving challenge", err)
 	}
