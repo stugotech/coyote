@@ -9,7 +9,10 @@ import (
 	"github.com/stugotech/coyote/coyote"
 	"github.com/stugotech/coyote/store"
 	"github.com/stugotech/goconfig"
+	"github.com/stugotech/golog"
 )
+
+var logger = golog.NewPackageLogger()
 
 // Flag names
 const (

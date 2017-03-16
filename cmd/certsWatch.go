@@ -16,9 +16,19 @@ var certsWatchCmd = &cobra.Command{
 		if err != nil {
 			return NewCommandErrorF(255, "unable to create coyote: %v", err)
 		}
-		// renew certificates that will expire in less than a week
-		coy.RenewLoop(time.Duration(1)*time.Hour, time.Duration(7)*time.Hour*24)
-		return nil
+
+		day := time.Duration(7) * time.Hour * 24
+		for {
+			// renew certificates that will expire in less than a week
+			certs, err := coy.RenewExpiringCertificates(day * 7)
+			if err == nil {
+				err = certificateSync(certs)
+			}
+			if err != nil {
+				logger.Errore(err)
+			}
+			time.Sleep(day)
+		}
 	},
 }
 

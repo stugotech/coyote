@@ -29,13 +29,12 @@ type Coyote interface {
 	// CompleteAuthorize tells the ACME server to complete the challenge.
 	CompleteAuthorize(challengeURI string) error
 	// NewCertificate creates one or more certificates for the specified domains, grouped by registered domain.
-	NewCertificate(domains []string) error
+	NewCertificate(domains []string) ([]*store.Certificate, error)
 	// RenewExpiringCertificates checks expiry dates on certificates and renews certificates that will
 	// expire before `before` has elapsed.
-	RenewExpiringCertificates(before time.Duration) error
-	// RenewLoop loops forever, checking expiry dates on certificates on the specified `period` and
-	// renewing certificates that will expire before `before` has elapsed.
-	RenewLoop(period time.Duration, before time.Duration)
+	RenewExpiringCertificates(before time.Duration) ([]*store.Certificate, error)
+	// GetCertificates gets all certificates in the store.
+	GetCertificates() ([]*store.Certificate, error)
 }
 
 // Config describes the coyote configuration settings
@@ -213,7 +212,7 @@ func (c *coyote) CompleteAuthorize(challengeURI string) error {
 }
 
 // NewCertificate creates a new certificate for the specified domains.
-func (c *coyote) NewCertificate(domains []string) error {
+func (c *coyote) NewCertificate(domains []string) ([]*store.Certificate, error) {
 	logger.Info("create new certificate",
 		golog.Strings("domains", domains),
 	)
@@ -223,11 +222,11 @@ func (c *coyote) NewCertificate(domains []string) error {
 	// authorize domains first and group under registered domains
 	for _, d := range domains {
 		if err := c.Authorize(d); err != nil {
-			return logger.Errore(err)
+			return nil, logger.Errore(err)
 		}
 		reg, err := publicsuffix.EffectiveTLDPlusOne(d)
 		if err != nil {
-			return logger.Errorex("can't get public suffix for domain", err, golog.String("domain", d))
+			return nil, logger.Errorex("can't get public suffix for domain", err, golog.String("domain", d))
 		}
 		// don't add the domain itself to the child list
 		if reg == d {
@@ -240,12 +239,14 @@ func (c *coyote) NewCertificate(domains []string) error {
 		}
 	}
 
+	var certs []*store.Certificate
+
 	// now create certificates
 	for domain, sans := range groupedDomains {
 		// see if the domain already has a certificate
 		storeCert, err := c.config.Store.GetCertificate(domain)
 		if err != nil {
-			return logger.Errore(err)
+			return nil, logger.Errore(err)
 		}
 
 		if storeCert != nil {
@@ -254,7 +255,7 @@ func (c *coyote) NewCertificate(domains []string) error {
 
 		cert, err := c.client.CreateCertificate(context.Background(), domain, sans)
 		if err != nil {
-			return logger.Errore(err)
+			return nil, logger.Errore(err)
 		}
 
 		storeCert = &store.Certificate{
@@ -267,44 +268,43 @@ func (c *coyote) NewCertificate(domains []string) error {
 
 		err = c.config.Store.PutCertificate(storeCert)
 		if err != nil {
-			return logger.Errore(err)
+			return nil, logger.Errore(err)
 		}
+
+		certs = append(certs, storeCert)
 	}
 
-	return nil
+	return certs, nil
 }
 
 // RenewExpiringCertificates checks expiry dates on certificates and renews certificates that will
 // expire before `before` has elapsed.
-func (c *coyote) RenewExpiringCertificates(before time.Duration) error {
+func (c *coyote) RenewExpiringCertificates(before time.Duration) ([]*store.Certificate, error) {
 	certs, err := c.config.Store.GetCertificates()
 	if err != nil {
-		return logger.Errore(err)
+		return nil, logger.Errore(err)
 	}
 
+	var renewedCerts []*store.Certificate
 	threshold := time.Now().Add(before)
 
 	for _, cert := range certs {
 		if threshold.After(cert.Expires) {
 			domains := append(cert.AlternativeNames[:], cert.Domain)
-			if err = c.NewCertificate(domains); err != nil {
-				return logger.Errore(err)
+			newCerts, err := c.NewCertificate(domains)
+			if err != nil {
+				return nil, logger.Errore(err)
 			}
+			renewedCerts = append(renewedCerts, newCerts...)
 		}
 	}
 
-	return nil
+	return renewedCerts, nil
 }
 
-// RenewLoop loops forever, checking expiry dates on certificates on the specified `period` and
-// renewing certificates that will expire before `before` has elapsed.
-func (c *coyote) RenewLoop(period time.Duration, before time.Duration) {
-	for {
-		if err := c.RenewExpiringCertificates(before); err != nil {
-			logger.Errore(err)
-		}
-		time.Sleep(period)
-	}
+// GetCertificate gets all certificates in the store.
+func (c *coyote) GetCertificates() ([]*store.Certificate, error) {
+	return c.config.Store.GetCertificates()
 }
 
 // uniqueStrings returns the unique strings in all of the lists

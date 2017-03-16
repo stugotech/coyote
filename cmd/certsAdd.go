@@ -18,11 +18,11 @@ var certsAddCmd = &cobra.Command{
 			return NewCommandErrorF(255, "unable to create coyote: %v", err)
 		}
 		// get certificate
-		err = coy.NewCertificate(args)
+		certs, err := coy.NewCertificate(args)
 		if err != nil {
 			return NewCommandErrorF(255, "unable to get certificates (%v): %v", args, err)
 		}
-		return nil
+		return certificateSync(certs)
 	},
 }
 
